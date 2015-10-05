@@ -82,11 +82,14 @@ static void prv_light_timer(void *data) {
 }
 
 static void prv_accel_handler(AccelData *data, uint32_t num_samples) {
-  // state must be unglanced before active can be triggered again
   static bool unglanced = true;
+  uint32_t active_count = 0;
   for (uint32_t i = 0; i < num_samples; i++) {
     if(WITHIN_ZONE(active_zone, data[i].x, data[i].y, data[i].z)) {
-      if (unglanced) {
+      active_count++;
+      // state must be unglanced before active can be triggered again
+      // and all samples must be in the active zone to trigger active
+      if (unglanced && active_count == num_samples) {
         vibes_double_pulse();
         unglanced = false;
         prv_update_state(GLANCING_ACTIVE);
@@ -98,7 +101,6 @@ static void prv_accel_handler(AccelData *data, uint32_t num_samples) {
           prv_light_timer(NULL);
         }
       }
-      return;
     } else if(WITHIN_ZONE(inactive_zone_1, data[i].x, data[i].y, data[i].z) ||
               WITHIN_ZONE(inactive_zone_2, data[i].x, data[i].y, data[i].z)) {
       unglanced = true;
@@ -107,14 +109,19 @@ static void prv_accel_handler(AccelData *data, uint32_t num_samples) {
       if (glancing_timeout_handle) {
         app_timer_cancel(glancing_timeout_handle);
       }
+      // If even 1 sample was in inactive zone, we trigger unglanced
+      // and inactive and return
       return;
     }
   }
-  // never hit active or inactive zones (ie. Dead zone): just kill it, but not unglanced
-  prv_update_state(GLANCING_INACTIVE);
-  // Disable timeout if unnecessary
-  if (glancing_timeout_handle) {
-    app_timer_cancel(glancing_timeout_handle);
+
+  if (!active_count) {
+    // never hit active or inactive zones (ie. Dead zone): just kill it, but not unglanced
+    prv_update_state(GLANCING_INACTIVE);
+    // Disable timeout if unnecessary
+    if (glancing_timeout_handle) {
+      app_timer_cancel(glancing_timeout_handle);
+    }
   }
 }
 
@@ -122,7 +129,10 @@ static void prv_tap_handler(AccelAxisType axis, int32_t direction) {
   if(!prv_is_glancing()) {
     // force light to be off when we are not looking
     // to override previous flick light behavior
-    light_enable(false);
+    //light_enable(false);
+    
+    // Enable the old flick behaviour for backlight
+    light_enable_interaction();
   }
 }
 
