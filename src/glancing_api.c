@@ -45,6 +45,8 @@ static GlancingData prv_data = {.state = GLANCING_INACTIVE};
 static int prv_timeout_ms = 0;
 static AppTimer *glancing_timeout_handle = NULL;
 static bool prv_control_backlight = false;
+// the time duration of the fade out
+static const int32_t LIGHT_FADE_TIME_MS = 500;
 
 static inline void prv_update_state(GlanceState state) {
   // Only call subscribed callback when state changes
@@ -65,8 +67,12 @@ static void glance_timeout(void* data) {
 // Light interactive timer to save power by not turning on light in ambient sunlight
 static void prv_light_timer(void *data) {
   if (prv_is_glancing()) {
-    app_timer_register(2 * 1000, prv_light_timer, data);
+    app_timer_register(LIGHT_FADE_TIME_MS, prv_light_timer, data);
     light_enable_interaction();
+  } else {
+    // no control over triggering fade-out from API
+    // so just turn light off for now
+    light_enable(false);
   }
 }
 
