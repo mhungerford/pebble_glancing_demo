@@ -22,22 +22,27 @@ typedef struct glancing_zone {
   segment z_segment;
 } glancing_zone;
 
-// all values outsize of dead zone are the inactive zone
-// dead zone allows for tighter active zone for activation, 
-// less likely reactivate which requires going from inactive zone to active zone
-// less likely to have intermittent state changes
-
+// watch tilted towards user, screen pointed toward user
 glancing_zone active_zone = {
-  .x_segment = { -400, 400},
-  .y_segment = { -900, 100},
+  .x_segment = { -600, 600},
+  .y_segment = { -900, 200},
   .z_segment = { -1100, 0}
 };
 
-glancing_zone dead_zone = {
-  .x_segment = { -700, 700},   // 300 padding in x
-  .y_segment = { -1100, 300},  // 200 padding in y
-  .z_segment = { -1200, 100}   // 100 padding in z
+// arm hanging downward, select button pointing toward ground
+glancing_zone inactive_zone_1 = {
+  .x_segment = { 600, 1000},
+  .y_segment = { -500, 500},
+  .z_segment = { -800, 800}
 };
+
+// arm horizontal, screen facing away from user, essentially wrist was rotated away from user
+glancing_zone inactive_zone_2 = {
+  .x_segment = { -600, 600},
+  .y_segment = { 850, 1200},
+  .z_segment = { -500, 500}
+};
+
 
 static void prv_glancing_callback(GlancingData *data) {}
 static GlancingDataHandler prv_handler = prv_glancing_callback;
@@ -66,7 +71,7 @@ static void glance_timeout(void* data) {
 
 // Light interactive timer to save power by not turning on light in ambient sunlight
 static void prv_light_timer(void *data) {
-  if (prv_is_glancing()) {
+  if (prv_is_glancing()) { 
     app_timer_register(LIGHT_FADE_TIME_MS, prv_light_timer, data);
     light_enable_interaction();
   } else {
@@ -78,11 +83,11 @@ static void prv_light_timer(void *data) {
 
 static void prv_accel_handler(AccelData *data, uint32_t num_samples) {
   // state must be unglanced before active can be triggered again
-  // which only happens in inactive_zone, not in dead_zone
   static bool unglanced = true;
   for (uint32_t i = 0; i < num_samples; i++) {
     if(WITHIN_ZONE(active_zone, data[i].x, data[i].y, data[i].z)) {
       if (unglanced) {
+        vibes_double_pulse();
         unglanced = false;
         prv_update_state(GLANCING_ACTIVE);
         // timeout for glancing
@@ -93,16 +98,23 @@ static void prv_accel_handler(AccelData *data, uint32_t num_samples) {
           prv_light_timer(NULL);
         }
       }
-    } else if(WITHIN_ZONE(dead_zone, data[i].x, data[i].y, data[i].z)) {
-      // Do nothing
-    } else { // inactive_zone
+      return;
+    } else if(WITHIN_ZONE(inactive_zone_1, data[i].x, data[i].y, data[i].z) ||
+              WITHIN_ZONE(inactive_zone_2, data[i].x, data[i].y, data[i].z)) {
       unglanced = true;
       prv_update_state(GLANCING_INACTIVE);
       // Disable timeout if unnecessary
       if (glancing_timeout_handle) {
         app_timer_cancel(glancing_timeout_handle);
       }
+      return;
     }
+  }
+  // never hit active or inactive zones (ie. Dead zone): just kill it, but not unglanced
+  prv_update_state(GLANCING_INACTIVE);
+  // Disable timeout if unnecessary
+  if (glancing_timeout_handle) {
+    app_timer_cancel(glancing_timeout_handle);
   }
 }
 
