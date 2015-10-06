@@ -52,6 +52,8 @@ static AppTimer *glancing_timeout_handle = NULL;
 static bool prv_control_backlight = false;
 // the time duration of the fade out
 static const int32_t LIGHT_FADE_TIME_MS = 500;
+static time_t s_last_unglanced = 0;
+static const int32_t UNGLANCED_SEC = 3;
 
 static inline void prv_update_state(GlanceState state) {
   // Only call subscribed callback when state changes
@@ -84,12 +86,14 @@ static void prv_light_timer(void *data) {
 static void prv_accel_handler(AccelData *data, uint32_t num_samples) {
   static bool unglanced = true;
   uint32_t active_count = 0;
+  time_t current_time = time(NULL);
   for (uint32_t i = 0; i < num_samples; i++) {
     if(WITHIN_ZONE(active_zone, data[i].x, data[i].y, data[i].z)) {
       active_count++;
       // state must be unglanced before active can be triggered again
       // and all samples must be in the active zone to trigger active
-      if (unglanced && active_count == num_samples) {
+      if (unglanced && active_count == num_samples && 
+          (current_time < s_last_unglanced + UNGLANCED_SEC)) {
         vibes_double_pulse();
         unglanced = false;
         prv_update_state(GLANCING_ACTIVE);
@@ -104,6 +108,7 @@ static void prv_accel_handler(AccelData *data, uint32_t num_samples) {
     } else if(WITHIN_ZONE(inactive_zone_1, data[i].x, data[i].y, data[i].z) ||
               WITHIN_ZONE(inactive_zone_2, data[i].x, data[i].y, data[i].z)) {
       unglanced = true;
+      s_last_unglanced = time(NULL);
       prv_update_state(GLANCING_INACTIVE);
       // Disable timeout if unnecessary
       if (glancing_timeout_handle) {
@@ -144,7 +149,7 @@ void glancing_service_subscribe(
   //Setup motion accel handler with low sample rate
   // 10 hz with buffer for 5 samples for 0.5 second update rate
   accel_data_service_subscribe(5, prv_accel_handler);
-  accel_service_set_sampling_rate(ACCEL_SAMPLING_10HZ);
+  accel_service_set_sampling_rate(ACCEL_SAMPLING_25HZ);
   
   prv_control_backlight = control_backlight;
   if (prv_control_backlight) {
