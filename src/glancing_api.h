@@ -14,7 +14,7 @@ typedef struct GlancingData {
 
 typedef void (*GlancingDataHandler)(GlancingData *data);
 
-void glancing_service_subscribe(
-    int timeout_ms, bool control_backlight, GlancingDataHandler handler);
+void glancing_service_subscribe(int timeout_ms, bool control_backlight, 
+                                bool legacy_flick_backlight, GlancingDataHandler handler);
 
 void glancing_service_unsubscribe();

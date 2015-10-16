@@ -95,7 +95,7 @@ static void window_load(Window *window) {
   tick_timer_service_subscribe((MINUTE_UNIT), tick_handler);
 
   // Enable Glancing with normal 5 second timeout, takeover backlight
-  glancing_service_subscribe(5 * 1000, true, glancing_callback);
+  glancing_service_subscribe(5 * 1000, true, false, glancing_callback);
 }
 
 static void window_unload(Window *window) {

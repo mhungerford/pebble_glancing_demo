@@ -1,6 +1,9 @@
 #include <pebble.h>
 #include "glancing_api.h"
 
+// Enable debugging of glancing, currently just vibrate on glancing
+#define DEBUG
+
 #ifndef WITHIN
 #define WITHIN(n, min, max) ((n) >= (min) && (n) <= (max))
 #endif
@@ -24,20 +27,20 @@ typedef struct glancing_zone {
 
 // watch tilted towards user, screen pointed toward user
 glancing_zone active_zone = {
-  .x_segment = { -600, 600},
+  .x_segment = { -500, 500},
   .y_segment = { -900, 200},
   .z_segment = { -1100, 0}
 };
 
 // arm hanging downward, select button pointing toward ground
-glancing_zone inactive_zone_1 = {
-  .x_segment = { 600, 1000},
+glancing_zone inactive_zone_downward = {
+  .x_segment = { 800, 1000},
   .y_segment = { -500, 500},
   .z_segment = { -800, 800}
 };
 
 // arm horizontal, screen facing away from user, essentially wrist was rotated away from user
-glancing_zone inactive_zone_2 = {
+glancing_zone inactive_zone_away = {
   .x_segment = { -600, 600},
   .y_segment = { 850, 1200},
   .z_segment = { -500, 500}
@@ -50,10 +53,22 @@ static GlancingData prv_data = {.state = GLANCING_INACTIVE};
 static int prv_timeout_ms = 0;
 static AppTimer *glancing_timeout_handle = NULL;
 static bool prv_control_backlight = false;
+static bool prv_legacy_flick_backlight = false;
 // the time duration of the fade out
 static const int32_t LIGHT_FADE_TIME_MS = 500;
-static time_t s_last_unglanced = 0;
-static const int32_t UNGLANCED_SEC = 3;
+
+// window of time from inactive zone to active to trigger glance
+// stored in seconds for the time being
+static const uint32_t DOWNWARD_WINDOW = 1;
+static const uint32_t AWAY_WINDOW = 1;
+static const uint32_t ROLL_WINDOW_MS = 500;
+
+typedef struct time_ms_t {
+  time_t sec;
+  uint16_t ms;
+} time_ms_t;
+static time_ms_t s_glanced_window = {0};
+static time_ms_t s_last_active = {0};
 
 static inline void prv_update_state(GlanceState state) {
   // Only call subscribed callback when state changes
@@ -86,15 +101,21 @@ static void prv_light_timer(void *data) {
 static void prv_accel_handler(AccelData *data, uint32_t num_samples) {
   static bool unglanced = true;
   uint32_t active_count = 0;
-  time_t current_time = time(NULL);
+  time_ms_t current_time;
+  time_ms(&current_time.sec, &current_time.ms);
+
   for (uint32_t i = 0; i < num_samples; i++) {
     if(WITHIN_ZONE(active_zone, data[i].x, data[i].y, data[i].z)) {
       active_count++;
+      time_ms(&s_last_active.sec, &s_last_active.ms);
       // state must be unglanced before active can be triggered again
       // and all samples must be in the active zone to trigger active
       if (unglanced && active_count == num_samples && 
-          (current_time < s_last_unglanced + UNGLANCED_SEC)) {
+          ((int64_t)current_time.sec * 1000 + current_time.ms < 
+           (int64_t)s_glanced_window.sec * 1000 + s_glanced_window.ms)) {
+#ifdef DEBUG
         vibes_double_pulse();
+#endif
         unglanced = false;
         prv_update_state(GLANCING_ACTIVE);
         // timeout for glancing
@@ -104,15 +125,32 @@ static void prv_accel_handler(AccelData *data, uint32_t num_samples) {
         if (prv_control_backlight) {
           prv_light_timer(NULL);
         }
+        return;
       }
-    } else if(WITHIN_ZONE(inactive_zone_1, data[i].x, data[i].y, data[i].z) ||
-              WITHIN_ZONE(inactive_zone_2, data[i].x, data[i].y, data[i].z)) {
+    } else if (WITHIN_ZONE(inactive_zone_downward, data[i].x, data[i].y, data[i].z)) {
       unglanced = true;
-      s_last_unglanced = time(NULL);
+      time_ms(&s_glanced_window.sec, &s_glanced_window.ms);
+      s_glanced_window.sec += DOWNWARD_WINDOW;
       prv_update_state(GLANCING_INACTIVE);
       // Disable timeout if unnecessary
       if (glancing_timeout_handle) {
         app_timer_cancel(glancing_timeout_handle);
+      }
+      // If even 1 sample was in inactive zone, we trigger unglanced
+      // and inactive and return
+      return;
+    } else if (WITHIN_ZONE(inactive_zone_away, data[i].x, data[i].y, data[i].z)) {
+      unglanced = true;
+      prv_update_state(GLANCING_INACTIVE);
+      // Disable timeout if unnecessary
+      if (glancing_timeout_handle) {
+        app_timer_cancel(glancing_timeout_handle);
+      }
+      // only restart unglanced timer if they were in the active range just before this
+      if (((int64_t)current_time.sec * 1000 + current_time.ms < 
+          (int64_t)s_last_active.sec * 1000 + s_last_active.ms + ROLL_WINDOW_MS)) {
+        time_ms(&s_glanced_window.sec, &s_glanced_window.ms);
+        s_glanced_window.sec += AWAY_WINDOW;
       }
       // If even 1 sample was in inactive zone, we trigger unglanced
       // and inactive and return
@@ -132,28 +170,32 @@ static void prv_accel_handler(AccelData *data, uint32_t num_samples) {
 
 static void prv_tap_handler(AccelAxisType axis, int32_t direction) {
   if(!prv_is_glancing()) {
-    // force light to be off when we are not looking
-    // to override previous flick light behavior
-    //light_enable(false);
-    
     // Enable the old flick behaviour for backlight
-    light_enable_interaction();
+    if (prv_legacy_flick_backlight) {
+      light_enable_interaction();
+    } else {
+      // force light to be off when we are not looking
+      // to override previous flick light behavior
+      light_enable(false);
+    }
   }
 }
 
-void glancing_service_subscribe(
-    int timeout_ms, bool control_backlight, GlancingDataHandler handler) {
+void glancing_service_subscribe(int timeout_ms, bool control_backlight, 
+                                bool legacy_flick_backlight, GlancingDataHandler handler) {
   prv_handler = handler;
   prv_timeout_ms = (timeout_ms > 0) ? timeout_ms : 0;
 
-  //Setup motion accel handler with low sample rate
+  // Setup motion accel handler with low sample rate
   // 10 hz with buffer for 5 samples for 0.5 second update rate
   accel_data_service_subscribe(5, prv_accel_handler);
   accel_service_set_sampling_rate(ACCEL_SAMPLING_25HZ);
   
+  prv_legacy_flick_backlight = legacy_flick_backlight;
   prv_control_backlight = control_backlight;
+
   if (prv_control_backlight) {
-    //Setup tap service to avoid old flick to light behavior
+    // Setup tap service to support or disable flick to light behavior
     accel_tap_service_subscribe(prv_tap_handler);
   }
 }
