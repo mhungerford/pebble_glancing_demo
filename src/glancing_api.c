@@ -135,6 +135,7 @@ static void prv_accel_handler(AccelData *data, uint32_t num_samples) {
       // Disable timeout if unnecessary
       if (glancing_timeout_handle) {
         app_timer_cancel(glancing_timeout_handle);
+        glancing_timeout_handle = NULL;
       }
       // If even 1 sample was in inactive zone, we trigger unglanced
       // and inactive and return
@@ -145,6 +146,7 @@ static void prv_accel_handler(AccelData *data, uint32_t num_samples) {
       // Disable timeout if unnecessary
       if (glancing_timeout_handle) {
         app_timer_cancel(glancing_timeout_handle);
+        glancing_timeout_handle = NULL;
       }
       // only restart unglanced timer if they were in the active range just before this
       if (((int64_t)current_time.sec * 1000 + current_time.ms < 
@@ -164,6 +166,7 @@ static void prv_accel_handler(AccelData *data, uint32_t num_samples) {
     // Disable timeout if unnecessary
     if (glancing_timeout_handle) {
       app_timer_cancel(glancing_timeout_handle);
+      glancing_timeout_handle = NULL;
     }
   }
 }
